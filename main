@@ -115,25 +115,28 @@ do
     end)
     setreadonly(mt, true)
 
-    -- Don't permanently lock the streak attribute — doing so causes the game
-    -- to read our spoofed value (50) and increment from it, polluting detection.
-    -- Instead, watch for natural changes the game makes to detect wins, then
-    -- only update config values. Display is handled by the RequestProfile hook
-    -- and ViewProfile signals which already override at render time.
+    -- Capture real streak before locking so we have a baseline for detection.
     local lastRealStreak = LocalPlayer:GetAttribute("StatisticDuelsWinStreak") or 0
+    -- Lock attribute so game UI (Leaderstat.Title etc.) shows config value.
+    LocalPlayer:SetAttribute("StatisticDuelsWinStreak", config.winStreak)
 
     LocalPlayer:GetAttributeChangedSignal("StatisticDuelsWinStreak"):Connect(function()
         local newRealStreak = LocalPlayer:GetAttribute("StatisticDuelsWinStreak") or 0
+        -- Ignore our own writes
+        if newRealStreak == config.winStreak then return end
+        -- If the game wrote a value higher than what it last wrote, player won
         if newRealStreak > lastRealStreak then
-            -- Real streak went up — player won
             config.winStreak = config.winStreak + 1
             config.wins      = config.wins + 1
-            -- Notify all registered UI sections to refresh streak display
             for _, cb in ipairs(onStreakIncremented) do
                 task.defer(cb)
             end
         end
         lastRealStreak = newRealStreak
+        -- Re-lock to spoofed value after detecting the change
+        task.defer(function()
+            LocalPlayer:SetAttribute("StatisticDuelsWinStreak", config.winStreak)
+        end)
     end)
 
     -- Lock Level attribute (scoreboard reads it directly)
