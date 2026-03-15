@@ -115,25 +115,34 @@ do
     end)
     setreadonly(mt, true)
 
-    -- Capture real streak before locking so we have a baseline for detection.
+    -- StatisticDuelsWon is a player attribute (from StatisticsLibrary).
+    -- Watch it directly for win detection — more reliable than streak since
+    -- wins only ever increase, whereas streak resets on a loss.
+    local lastRealWins = LocalPlayer:GetAttribute("StatisticDuelsWon") or 0
+    LocalPlayer:GetAttributeChangedSignal("StatisticDuelsWon"):Connect(function()
+        local newRealWins = LocalPlayer:GetAttribute("StatisticDuelsWon") or 0
+        if newRealWins > lastRealWins then
+            local diff = newRealWins - lastRealWins
+            config.wins = config.wins + diff
+        end
+        lastRealWins = newRealWins
+    end)
+
+    -- StatisticDuelsWinStreak: watch for streak going up to increment spoofed streak.
+    -- Lock it so the game UI shows the spoofed value.
     local lastRealStreak = LocalPlayer:GetAttribute("StatisticDuelsWinStreak") or 0
-    -- Lock attribute so game UI (Leaderstat.Title etc.) shows config value.
     LocalPlayer:SetAttribute("StatisticDuelsWinStreak", config.winStreak)
 
     LocalPlayer:GetAttributeChangedSignal("StatisticDuelsWinStreak"):Connect(function()
         local newRealStreak = LocalPlayer:GetAttribute("StatisticDuelsWinStreak") or 0
-        -- Ignore our own writes
         if newRealStreak == config.winStreak then return end
-        -- If the game wrote a value higher than what it last wrote, player won
         if newRealStreak > lastRealStreak then
             config.winStreak = config.winStreak + 1
-            config.wins      = config.wins + 1
             for _, cb in ipairs(onStreakIncremented) do
                 task.defer(cb)
             end
         end
         lastRealStreak = newRealStreak
-        -- Re-lock to spoofed value after detecting the change
         task.defer(function()
             LocalPlayer:SetAttribute("StatisticDuelsWinStreak", config.winStreak)
         end)
