@@ -165,22 +165,21 @@ task.spawn(function()
         end
     end))
 
-    -- Sweep existing slots in case script runs mid-duel
-    -- filtergc with a function filter isn't supported on all executors,
-    -- so we get all tables and manually filter instead.
+    -- Sweep existing slots using getgc() which is universally supported
     local mt = getrawmetatable(TeammateSlot)
-    local allTables = filtergc("table", {})
-    for _, t in ipairs(allTables) do
-        local ok2, hasMt = pcall(function() return getrawmetatable(t) == mt end)
-        if ok2 and hasMt then
-            local ok3, uid = pcall(function() return rawget(t, "_user_id") end)
-            if ok3 and uid == LocalPlayer.UserId then
-                local ok4, sf = pcall(function() return rawget(t, "SlotFrame") end)
-                if ok4 and sf then
-                    local headshot = sf:FindFirstChild("Container")
-                        and sf.Container:FindFirstChild("Headshot")
-                    if headshot then
-                        applyHeadshotSpoof(headshot)
+    for _, t in ipairs(getgc()) do
+        if type(t) == "table" then
+            local ok2, hasMt = pcall(function() return getrawmetatable(t) == mt end)
+            if ok2 and hasMt then
+                local ok3, uid = pcall(function() return rawget(t, "_user_id") end)
+                if ok3 and uid == LocalPlayer.UserId then
+                    local ok4, sf = pcall(function() return rawget(t, "SlotFrame") end)
+                    if ok4 and sf then
+                        local headshot = sf:FindFirstChild("Container")
+                            and sf.Container:FindFirstChild("Headshot")
+                        if headshot then
+                            applyHeadshotSpoof(headshot)
+                        end
                     end
                 end
             end
