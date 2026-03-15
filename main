@@ -347,32 +347,63 @@ task.spawn(function()
         task.defer(refreshLeaderstats)
     end)
 
+    -- Check if a slot belongs to the local player (by display name or username)
+    local function isOurSlot(slot)
+        local dn = slot:FindFirstChild("DisplayName", true)
+        if dn and (dn.Text == localDisplayName or dn.Text == targetDisplayName) then
+            return true
+        end
+        local un = slot:FindFirstChild("Username", true)
+        if un and (un.Text == localUsername or un.Text == "@" .. localUsername
+                or un.Text == targetUsername or un.Text == "@" .. targetUsername) then
+            return true
+        end
+        return false
+    end
+
     local function processDesc(desc)
         if desc:IsA("TextLabel") or desc:IsA("TextButton") or desc:IsA("TextBox") then
             local t = desc.Text
             if t == localDisplayName then
                 spoofText(desc, targetDisplayName)
+                -- Walk up to slot and spoof its leaderstat
                 local slot = desc.Parent and desc.Parent.Parent
                 if slot then task.spawn(spoofLeaderstat, slot) end
+
             elseif t == localUsername then
                 spoofText(desc, targetUsername)
             elseif t == "@" .. localUsername then
                 spoofText(desc, "@" .. targetUsername)
-            elseif desc.Name == "Title" and desc.Parent and desc.Parent.Name == "Leaderstat" then
+
+            elseif desc.Name == "Title" and desc.Parent
+            and desc.Parent.Name == "Leaderstat" then
                 local slot = desc.Parent.Parent
-                if slot then
-                    local dn = slot:FindFirstChild("DisplayName", true)
-                    if dn and (dn.Text == localDisplayName or dn.Text == targetDisplayName) then
-                        spoofText(desc, tostring(config.winStreak))
-                    end
+                if slot and isOurSlot(slot) then
+                    spoofLeaderstat(slot)
                 end
             end
         end
     end
 
+    -- Also watch for our slot's leaderstat title being set after display name
+    -- is already spoofed to targetDisplayName
+    local function processSlot(slot)
+        if not isOurSlot(slot) then return end
+        spoofLeaderstat(slot)
+    end
+
+    for _, child in ipairs(Container:GetChildren()) do
+        task.spawn(processSlot, child)
+    end
+
     for _, desc in ipairs(Container:GetDescendants()) do
         processDesc(desc)
     end
+
+    Container.ChildAdded:Connect(function(child)
+        task.wait(0.1) -- let slot populate fully
+        processSlot(child)
+    end)
 
     Container.DescendantAdded:Connect(function(desc)
         task.wait(0.05)
