@@ -109,24 +109,21 @@ do
     end)
     setreadonly(mt, true)
 
-    -- Capture real streak BEFORE overwriting so we can detect game increments
-    -- (e.g. real streak goes 2 -> 3) regardless of the spoofed value being 50.
+    -- Don't permanently lock the streak attribute — doing so causes the game
+    -- to read our spoofed value (50) and increment from it, polluting detection.
+    -- Instead, watch for natural changes the game makes to detect wins, then
+    -- only update config values. Display is handled by the RequestProfile hook
+    -- and ViewProfile signals which already override at render time.
     local lastRealStreak = LocalPlayer:GetAttribute("StatisticDuelsWinStreak") or 0
-    LocalPlayer:SetAttribute("StatisticDuelsWinStreak", config.winStreak)
 
     LocalPlayer:GetAttributeChangedSignal("StatisticDuelsWinStreak"):Connect(function()
         local newRealStreak = LocalPlayer:GetAttribute("StatisticDuelsWinStreak") or 0
-        -- Ignore our own deferred writes
-        if newRealStreak == config.winStreak then return end
-        -- If real streak went up, player won — increment spoofed values
         if newRealStreak > lastRealStreak then
+            -- Real streak went up — player won
             config.winStreak = config.winStreak + 1
             config.wins      = config.wins + 1
         end
         lastRealStreak = newRealStreak
-        task.defer(function()
-            LocalPlayer:SetAttribute("StatisticDuelsWinStreak", config.winStreak)
-        end)
     end)
 
     -- Lock Level attribute (scoreboard reads it directly)
@@ -313,18 +310,42 @@ task.spawn(function()
     local MainGui    = PlayerGui:WaitForChild("MainGui",     15)
     local Container  = MainGui.PlayerList.Container.Elements.Container.Middle.List.Container
 
+    -- Keep a reference to all active leaderstat title labels we own
+    -- so we can update them whenever config.winStreak increments.
+    local leaderstatTitles = {}
+
     local function spoofLeaderstat(slot)
         local leaderstat = slot:FindFirstChild("Leaderstat")
         if not leaderstat then return end
         local title = leaderstat:FindFirstChild("Title")
         if not title then return end
         title.Text = tostring(config.winStreak)
+        table.insert(leaderstatTitles, title)
         title:GetPropertyChangedSignal("Text"):Connect(function()
+            -- Always read config.winStreak fresh — not a captured value
             if title.Text ~= tostring(config.winStreak) then
                 title.Text = tostring(config.winStreak)
             end
         end)
     end
+
+    -- Called externally whenever config.winStreak increments
+    -- so all visible leaderstat titles update immediately.
+    local function refreshLeaderstats()
+        for i = #leaderstatTitles, 1, -1 do
+            local title = leaderstatTitles[i]
+            if not title or not title.Parent then
+                table.remove(leaderstatTitles, i)
+            else
+                title.Text = tostring(config.winStreak)
+            end
+        end
+    end
+
+    -- Hook into the streak attribute change to refresh leaderstat display
+    LocalPlayer:GetAttributeChangedSignal("StatisticDuelsWinStreak"):Connect(function()
+        task.defer(refreshLeaderstats)
+    end)
 
     local function processDesc(desc)
         if desc:IsA("TextLabel") or desc:IsA("TextButton") or desc:IsA("TextBox") then
