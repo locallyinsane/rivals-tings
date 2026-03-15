@@ -109,13 +109,16 @@ do
     end)
     setreadonly(mt, true)
 
-    -- Lock WinStreak attribute
+    -- Capture real streak BEFORE overwriting so we can detect game increments
+    -- (e.g. real streak goes 2 -> 3) regardless of the spoofed value being 50.
+    local lastRealStreak = LocalPlayer:GetAttribute("StatisticDuelsWinStreak") or 0
     LocalPlayer:SetAttribute("StatisticDuelsWinStreak", config.winStreak)
 
-    local lastRealStreak = LocalPlayer:GetAttribute("StatisticDuelsWinStreak") or 0
     LocalPlayer:GetAttributeChangedSignal("StatisticDuelsWinStreak"):Connect(function()
         local newRealStreak = LocalPlayer:GetAttribute("StatisticDuelsWinStreak") or 0
+        -- Ignore our own deferred writes
         if newRealStreak == config.winStreak then return end
+        -- If real streak went up, player won — increment spoofed values
         if newRealStreak > lastRealStreak then
             config.winStreak = config.winStreak + 1
             config.wins      = config.wins + 1
