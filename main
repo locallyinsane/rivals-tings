@@ -1,1 +1,386 @@
+-- ============================================================
+--  SPOOF SCRIPT  |  Target ID: 1400671
+--  config is defined externally before loadstring call
+-- ============================================================
 
+local Players     = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local LocalPlayer = Players.LocalPlayer
+local targetId    = 1400671
+
+-- ============================================================
+-- STEP 1: Fetch target info
+-- ============================================================
+
+local targetDisplayName, targetUsername
+
+local ok, result = pcall(function()
+    local response = request({
+        Url    = "https://users.roblox.com/v1/users/" .. targetId,
+        Method = "GET",
+    })
+    local data = HttpService:JSONDecode(response.Body)
+    targetDisplayName = data.displayName
+    targetUsername    = data.name
+end)
+
+if not ok then
+    local reqFunc = syn and syn.request or http and http.request or nil
+    if reqFunc then
+        local ok2, result2 = pcall(function()
+            local response = reqFunc({
+                Url    = "https://users.roblox.com/v1/users/" .. targetId,
+                Method = "GET",
+            })
+            local data = HttpService:JSONDecode(response.Body)
+            targetDisplayName = data.displayName
+            targetUsername    = data.name
+        end)
+        if not ok2 then
+            warn("[SPOOF] Fallback also failed: " .. tostring(result2))
+        end
+    else
+        warn("[SPOOF] No http request function found at all!")
+    end
+end
+
+if not targetDisplayName then
+    warn("[SPOOF] Could not get target info. Halting.")
+    return
+end
+
+local localDisplayName = LocalPlayer.DisplayName
+local localUsername    = LocalPlayer.Name
+local headshotUrl      = "https://www.roblox.com/headshot-thumbnail/image?userId="
+                         .. targetId .. "&width=420&height=420&format=png"
+
+-- ============================================================
+-- HELPERS
+-- ============================================================
+
+local function spoofText(label, value)
+    if not label then return end
+    label.Text = value
+    label:GetPropertyChangedSignal("Text"):Connect(function()
+        if label.Text ~= value then
+            label.Text = value
+        end
+    end)
+end
+
+local function spoofImage(label, url)
+    if not label then return end
+    label.Image = url
+    label:GetPropertyChangedSignal("Image"):Connect(function()
+        if label.Image ~= url then
+            label.Image = url
+        end
+    end)
+end
+
+-- ============================================================
+-- SECTION 0 — Hook RequestProfile remote + attribute locks
+-- ============================================================
+do
+    local RS = game:GetService("ReplicatedStorage")
+
+    local mt  = getrawmetatable(game)
+    local old = mt.__namecall
+    setreadonly(mt, false)
+    mt.__namecall = newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        if method == "InvokeServer" then
+            local ok2, remote = pcall(function()
+                return RS.Remotes.Misc.RequestProfile
+            end)
+            if ok2 and tostring(self) == tostring(remote) then
+                local args = {...}
+                local requestedPlayer = args[1]
+                local isLocalPlayer = requestedPlayer ~= nil
+                    and tostring(requestedPlayer) == tostring(LocalPlayer)
+                local result = old(self, ...)
+                if result and isLocalPlayer then
+                    result.CasualWins       = config.wins
+                    result.CasualWinPercent = config.winRate / 100
+                    result.Level            = config.level
+                end
+                return result
+            end
+        end
+        return old(self, ...)
+    end)
+    setreadonly(mt, true)
+
+    -- Lock WinStreak attribute
+    LocalPlayer:SetAttribute("StatisticDuelsWinStreak", config.winStreak)
+
+    local lastRealStreak = LocalPlayer:GetAttribute("StatisticDuelsWinStreak") or 0
+    LocalPlayer:GetAttributeChangedSignal("StatisticDuelsWinStreak"):Connect(function()
+        local newRealStreak = LocalPlayer:GetAttribute("StatisticDuelsWinStreak") or 0
+        if newRealStreak == config.winStreak then return end
+        if newRealStreak > lastRealStreak then
+            config.winStreak = config.winStreak + 1
+            config.wins      = config.wins + 1
+        end
+        lastRealStreak = newRealStreak
+        task.defer(function()
+            LocalPlayer:SetAttribute("StatisticDuelsWinStreak", config.winStreak)
+        end)
+    end)
+
+    -- Lock Level attribute (scoreboard reads it directly)
+    LocalPlayer:SetAttribute("Level", config.level)
+    LocalPlayer:GetAttributeChangedSignal("Level"):Connect(function()
+        if LocalPlayer:GetAttribute("Level") == config.level then return end
+        task.defer(function()
+            LocalPlayer:SetAttribute("Level", config.level)
+        end)
+    end)
+end
+
+-- ============================================================
+-- SECTION 1 — Nametag
+-- ============================================================
+task.spawn(function()
+    local ComplianceController = require(
+        LocalPlayer.PlayerScripts.Controllers:WaitForChild("ComplianceController")
+    )
+    local originalGetName = clonefunction(ComplianceController.GetName)
+    hookfunction(ComplianceController.GetName, newcclosure(function(self, playerObject)
+        if playerObject == LocalPlayer then
+            return targetDisplayName
+        end
+        return originalGetName(self, playerObject)
+    end))
+end)
+
+local function watchNametag(character)
+    local hrp = character:WaitForChild("HumanoidRootPart", 10)
+    if not hrp then return end
+
+    local function applyToDesc(desc)
+        if desc.Name == "DisplayName" and (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
+            task.wait(0.1)
+            desc.Text = targetDisplayName
+        elseif desc.Name == "Username" and (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
+            task.wait(0.1)
+            desc.Text = "@" .. targetUsername
+        end
+    end
+
+    for _, desc in ipairs(hrp:GetDescendants()) do
+        task.spawn(applyToDesc, desc)
+    end
+
+    hrp.DescendantAdded:Connect(function(desc)
+        task.spawn(applyToDesc, desc)
+    end)
+end
+
+if LocalPlayer.Character then
+    task.spawn(watchNametag, LocalPlayer.Character)
+end
+LocalPlayer.CharacterAdded:Connect(function(char)
+    task.spawn(watchNametag, char)
+end)
+
+-- ============================================================
+-- SECTION 2 — ViewProfile
+-- ============================================================
+task.spawn(function()
+    local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui",  15)
+    local MainGui     = PlayerGui:WaitForChild("MainGui",      15)
+    local MainFrame   = MainGui:WaitForChild("MainFrame",      15)
+    local Pages       = MainFrame:WaitForChild("Pages",        15)
+    local ViewProfile = Pages:WaitForChild("ViewProfile",      15)
+    local Active      = ViewProfile:WaitForChild("Active",     15)
+    local Player      = Active:WaitForChild("Player",          15)
+
+    local UsernameLabel     = Player:WaitForChild("Username",    10)
+    local HeadshotLabel     = Player:WaitForChild("Headshot",    10)
+    local DisplayNameLabel  = Player:WaitForChild("DisplayName", 10)
+    local LevelLabel        = Player:WaitForChild("Bragging",    10)
+                                    :WaitForChild("Level",       10)
+                                    :WaitForChild("Value",       10)
+    local CasualWinsLabel   = Player:WaitForChild("Casual",      10)
+                                    :WaitForChild("Wins",        10)
+    local CasualWinPctLabel = Player:WaitForChild("Casual",      10)
+                                    :WaitForChild("WinPercent",  10)
+
+    local localHeadshotUrl = "https://www.roblox.com/headshot-thumbnail/image?userId="
+                             .. LocalPlayer.UserId .. "&width=420&height=420&format=png"
+
+    local isShowingLocalPlayer = false
+
+    local function applyAllSpoofs()
+        UsernameLabel.Text     = "@" .. targetUsername
+        HeadshotLabel.Image    = headshotUrl
+        LevelLabel.Text        = tostring(config.level)
+        CasualWinsLabel.Text   = tostring(config.wins)
+        CasualWinPctLabel.Text = string.format("%.1f", config.winRate) .. "%"
+    end
+
+    Active:GetPropertyChangedSignal("Visible"):Connect(function()
+        if Active.Visible then
+            isShowingLocalPlayer = HeadshotLabel.Image == localHeadshotUrl
+                                or UsernameLabel.Text == "@" .. localUsername
+            if isShowingLocalPlayer then
+                applyAllSpoofs()
+            end
+        else
+            isShowingLocalPlayer = false
+        end
+    end)
+
+    UsernameLabel:GetPropertyChangedSignal("Text"):Connect(function()
+        if UsernameLabel.Text == "@" .. localUsername then
+            isShowingLocalPlayer = true
+            task.defer(applyAllSpoofs)
+        elseif UsernameLabel.Text ~= "@" .. targetUsername then
+            isShowingLocalPlayer = false
+        end
+    end)
+
+    HeadshotLabel:GetPropertyChangedSignal("Image"):Connect(function()
+        if HeadshotLabel.Image == localHeadshotUrl then
+            HeadshotLabel.Image = headshotUrl
+        end
+    end)
+
+    LevelLabel:GetPropertyChangedSignal("Text"):Connect(function()
+        if isShowingLocalPlayer and LevelLabel.Text ~= tostring(config.level) then
+            LevelLabel.Text = tostring(config.level)
+        end
+    end)
+
+    CasualWinsLabel:GetPropertyChangedSignal("Text"):Connect(function()
+        if isShowingLocalPlayer and CasualWinsLabel.Text ~= tostring(config.wins) then
+            CasualWinsLabel.Text = tostring(config.wins)
+        end
+    end)
+
+    CasualWinPctLabel:GetPropertyChangedSignal("Text"):Connect(function()
+        local spoofed = string.format("%.1f", config.winRate) .. "%"
+        if isShowingLocalPlayer and CasualWinPctLabel.Text ~= spoofed then
+            CasualWinPctLabel.Text = spoofed
+        end
+    end)
+end)
+
+-- ============================================================
+-- SECTION 2b — PlayerList Inspect panel
+-- ============================================================
+task.spawn(function()
+    local PlayerGui = LocalPlayer:WaitForChild("PlayerGui", 15)
+    local MainGui   = PlayerGui:WaitForChild("MainGui",     15)
+    local InspectPlayer = MainGui:WaitForChild("PlayerList",    15)
+                                 :WaitForChild("Container",     15)
+                                 :WaitForChild("Inspect",       15)
+                                 :WaitForChild("Container",     15)
+                                 :WaitForChild("Player",        15)
+
+    local InspectDisplayName = InspectPlayer:WaitForChild("DisplayName", 10)
+    local InspectUsername    = InspectPlayer:WaitForChild("Username",    10)
+    local InspectHeadshot    = InspectPlayer:WaitForChild("Headshot",    10)
+
+    local function onInspectUsernameChanged()
+        if InspectUsername.Text == "@" .. localUsername
+        or InspectUsername.Text == localUsername then
+            InspectDisplayName.Text = targetDisplayName
+            InspectUsername.Text    = "@" .. targetUsername
+            InspectHeadshot.Image   = headshotUrl
+        end
+    end
+
+    local function onInspectDisplayNameChanged()
+        if InspectDisplayName.Text == localDisplayName then
+            InspectDisplayName.Text = targetDisplayName
+            InspectUsername.Text    = "@" .. targetUsername
+            InspectHeadshot.Image   = headshotUrl
+        end
+    end
+
+    InspectUsername:GetPropertyChangedSignal("Text"):Connect(onInspectUsernameChanged)
+    InspectDisplayName:GetPropertyChangedSignal("Text"):Connect(onInspectDisplayNameChanged)
+end)
+
+-- ============================================================
+-- SECTION 3 — PlayerList
+-- ============================================================
+task.spawn(function()
+    local PlayerGui  = LocalPlayer:WaitForChild("PlayerGui", 15)
+    local MainGui    = PlayerGui:WaitForChild("MainGui",     15)
+    local Container  = MainGui.PlayerList.Container.Elements.Container.Middle.List.Container
+
+    local function spoofLeaderstat(slot)
+        local leaderstat = slot:FindFirstChild("Leaderstat")
+        if not leaderstat then return end
+        local title = leaderstat:FindFirstChild("Title")
+        if not title then return end
+        title.Text = tostring(config.winStreak)
+        title:GetPropertyChangedSignal("Text"):Connect(function()
+            if title.Text ~= tostring(config.winStreak) then
+                title.Text = tostring(config.winStreak)
+            end
+        end)
+    end
+
+    local function processDesc(desc)
+        if desc:IsA("TextLabel") or desc:IsA("TextButton") or desc:IsA("TextBox") then
+            local t = desc.Text
+            if t == localDisplayName then
+                spoofText(desc, targetDisplayName)
+                local slot = desc.Parent and desc.Parent.Parent
+                if slot then task.spawn(spoofLeaderstat, slot) end
+            elseif t == localUsername then
+                spoofText(desc, targetUsername)
+            elseif t == "@" .. localUsername then
+                spoofText(desc, "@" .. targetUsername)
+            elseif desc.Name == "Title" and desc.Parent and desc.Parent.Name == "Leaderstat" then
+                local slot = desc.Parent.Parent
+                if slot then
+                    local dn = slot:FindFirstChild("DisplayName", true)
+                    if dn and (dn.Text == localDisplayName or dn.Text == targetDisplayName) then
+                        spoofText(desc, tostring(config.winStreak))
+                    end
+                end
+            end
+        end
+    end
+
+    for _, desc in ipairs(Container:GetDescendants()) do
+        processDesc(desc)
+    end
+
+    Container.DescendantAdded:Connect(function(desc)
+        task.wait(0.05)
+        processDesc(desc)
+    end)
+end)
+
+-- ============================================================
+-- SECTION 4 — TeammateSlot headshot
+-- ============================================================
+task.spawn(function()
+    local TeammateSlot = require(
+        LocalPlayer.PlayerScripts.Modules:WaitForChild("TeammateSlot")
+    )
+
+    local originalSetup = clonefunction(TeammateSlot._Setup)
+    hookfunction(TeammateSlot._Setup, newcclosure(function(self, ...)
+        originalSetup(self, ...)
+        if self._user_id == LocalPlayer.UserId then
+            local headshot = self.SlotFrame
+                and self.SlotFrame:FindFirstChild("Container")
+                and self.SlotFrame.Container:FindFirstChild("Headshot")
+            if headshot then
+                headshot.Image = headshotUrl
+                headshot:GetPropertyChangedSignal("Image"):Connect(function()
+                    if headshot.Image ~= headshotUrl then
+                        headshot.Image = headshotUrl
+                    end
+                end)
+            end
+        end
+    end))
+end)
