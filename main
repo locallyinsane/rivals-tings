@@ -314,17 +314,36 @@ task.spawn(function()
     -- so we can update them whenever config.winStreak increments.
     local leaderstatTitles = {}
 
-    local function spoofLeaderstat(slot)
-        local leaderstat = slot:FindFirstChild("Leaderstat")
-        if not leaderstat then return end
-        local title = leaderstat:FindFirstChild("Title")
+    local function applyToTitle(title)
         if not title then return end
+        -- Check if already tracked
+        for _, t in ipairs(leaderstatTitles) do
+            if t == title then return end
+        end
         title.Text = tostring(config.winStreak)
         table.insert(leaderstatTitles, title)
         title:GetPropertyChangedSignal("Text"):Connect(function()
-            -- Always read config.winStreak fresh — not a captured value
             if title.Text ~= tostring(config.winStreak) then
                 title.Text = tostring(config.winStreak)
+            end
+        end)
+    end
+
+    local function spoofLeaderstat(slot)
+        -- Try immediately
+        local leaderstat = slot:FindFirstChild("Leaderstat")
+        if leaderstat then
+            local title = leaderstat:FindFirstChild("Title")
+            if title then
+                applyToTitle(title)
+                return
+            end
+        end
+        -- Leaderstat not present yet — watch for it to appear
+        slot.DescendantAdded:Connect(function(desc)
+            if desc.Name == "Title" and desc.Parent and desc.Parent.Name == "Leaderstat" then
+                task.wait() -- let game write its value first
+                applyToTitle(desc)
             end
         end)
     end
