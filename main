@@ -77,6 +77,12 @@ local function spoofImage(label, url)
 end
 
 -- ============================================================
+-- Shared refresh callbacks — sections register here so Section 0
+-- can trigger UI updates after incrementing config values.
+-- ============================================================
+local onStreakIncremented = {}
+
+-- ============================================================
 -- SECTION 0 — Hook RequestProfile remote + attribute locks
 -- ============================================================
 do
@@ -122,6 +128,10 @@ do
             -- Real streak went up — player won
             config.winStreak = config.winStreak + 1
             config.wins      = config.wins + 1
+            -- Notify all registered UI sections to refresh streak display
+            for _, cb in ipairs(onStreakIncremented) do
+                task.defer(cb)
+            end
         end
         lastRealStreak = newRealStreak
     end)
@@ -361,10 +371,8 @@ task.spawn(function()
         end
     end
 
-    -- Hook into the streak attribute change to refresh leaderstat display
-    LocalPlayer:GetAttributeChangedSignal("StatisticDuelsWinStreak"):Connect(function()
-        task.defer(refreshLeaderstats)
-    end)
+    -- Register refresh so Section 0 can call it after incrementing config.winStreak
+    table.insert(onStreakIncremented, refreshLeaderstats)
 
     -- Check if a slot belongs to the local player (by display name or username)
     local function isOurSlot(slot)
