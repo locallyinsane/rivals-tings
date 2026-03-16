@@ -108,16 +108,35 @@ do
                     -- ------------------------------------------------
                     -- FAVORITE WEAPONS SPOOF
                     -- Driven by config.favoriteWeapons (set in loader).
-                    -- Each entry is { Name = "..." } where Name is either:
-                    --   • A base weapon name  e.g. { Name = "Assault Rifle" }
-                    --   • A skin's own name   e.g. { Name = "Crimson Edge"  }
-                    --     (WeaponSlot looks skins up via CosmeticLibrary
-                    --      and renders the skin icon + weapon automatically)
+                    -- Each entry is { Name = "...", LayoutOrder = N } where:
+                    --   • Name is a base weapon  e.g. { Name = "Assault Rifle" }
+                    --     or a skin's own name   e.g. { Name = "Crimson Edge"  }
+                    --     (WeaponSlot resolves skins via CosmeticLibrary automatically)
+                    --   • LayoutOrder sets the visual slot (1=leftmost, 4=rightmost)
+                    --     If omitted, the array index is used as the fallback.
                     -- Run weapon_dumper.lua to find all valid name strings.
-                    -- Up to 3 slots, shown left-to-right in LayoutOrder.
                     -- ------------------------------------------------
                     if config.favoriteWeapons and #config.favoriteWeapons > 0 then
-                        result.FavoriteWeapons = config.favoriteWeapons
+                        -- Build a new table with LayoutOrder baked in so the
+                        -- ViewProfile loop (which uses v34 as LayoutOrder) gets
+                        -- the right slot positions regardless of pairs() order.
+                        local built = {}
+                        for i, entry in ipairs(config.favoriteWeapons) do
+                            local slotIndex = entry.LayoutOrder or i
+                            built[slotIndex] = {
+                                Name        = entry.Name,
+                                LayoutOrder = slotIndex,
+                            }
+                        end
+                        -- Re-pack into a clean array so ipairs works correctly
+                        -- in the game's rendering loop.
+                        local packed = {}
+                        for slot = 1, 4 do
+                            if built[slot] then
+                                table.insert(packed, built[slot])
+                            end
+                        end
+                        result.FavoriteWeapons = packed
                     end
                 end
                 return result
