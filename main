@@ -357,69 +357,65 @@ end)
 
 -- ============================================================
 -- SECTION 2c — MostPlayedWeapons slot fixup
--- The game renders WeaponSlots from result.FavoriteWeapons and
--- sets Title = entry.Name and looks up the icon internally.
--- We override both directly on the live UI elements so that:
---   • Title always shows the BASE weapon name (not the skin name)
---   • Picture.Image is always in rbxassetid:// format
--- Lookup order: CosmeticLibrary (skins) → ItemLibrary (base weapons)
+-- Overrides Title (base weapon name) and Picture.Image
+-- (rbxassetid:// format) on each rendered WeaponSlot whenever
+-- the ViewProfile panel is visible.
+-- Note: no local-player detection needed — Section 0 already
+-- ensures FavoriteWeapons is only spoofed for the local player.
 -- ============================================================
 task.spawn(function()
     if not config.favoriteWeapons or #config.favoriteWeapons == 0 then return end
 
     local RS = game:GetService("ReplicatedStorage")
 
-    -- Load libraries once — both may be nil if not available yet
-    local ItemLibrary, CosmeticLibrary
+    -- Load CosmeticLibrary to resolve skin → base weapon name
+    local CosmeticData = {}
     pcall(function()
-        ItemLibrary = require(RS.Modules.ItemLibrary)
-        -- ItemLibrary wraps its data inside .Items
-        if type(ItemLibrary) == "table" and type(ItemLibrary.Items) == "table" then
-            ItemLibrary = ItemLibrary.Items
-        end
-    end)
-    pcall(function()
-        CosmeticLibrary = require(RS.Modules.CosmeticLibrary)
-        -- CosmeticLibrary wraps its data inside .Cosmetics
-        if type(CosmeticLibrary) == "table" and type(CosmeticLibrary.Cosmetics) == "table" then
-            CosmeticLibrary = CosmeticLibrary.Cosmetics
+        local lib = require(RS.Modules.CosmeticLibrary)
+        if type(lib) == "table" then
+            CosmeticData = type(lib.Cosmetics) == "table" and lib.Cosmetics or lib
         end
     end)
 
-    -- --------------------------------------------------------
-    -- For a given Name string, resolve:
-    --   baseName  — the weapon's display name (e.g. "Katana")
-    --   imageId   — rbxassetid://XXXXX for that weapon/skin
-    -- --------------------------------------------------------
+    -- Load ItemLibrary to resolve base weapon → image asset ID
+    local ItemData = {}
+    pcall(function()
+        local lib = require(RS.Modules.ItemLibrary)
+        if type(lib) == "table" then
+            ItemData = type(lib.Items) == "table" and lib.Items or lib
+        end
+    end)
+
+    -- For a Name string resolve baseName and rbxassetid:// imageId
     local function resolveEntry(name)
         local baseName = name
         local imageId  = nil
 
-        -- Check CosmeticLibrary first (covers skins)
-        if CosmeticLibrary then
-            local cosData = CosmeticLibrary[name]
-            if cosData and cosData.Type == "Skin" then
-                -- Base name comes from ItemName on the skin entry
-                baseName = tostring(cosData.ItemName or name)
-                -- Try common image fields on the skin data
-                local raw = cosData.Image or cosData.Icon or cosData.Thumbnail
-                             or cosData.Picture or cosData.ImageId or nil
-                if raw then
-                    imageId = tostring(raw):match("^rbxassetid://") and tostring(raw)
-                              or "rbxassetid://" .. tostring(raw):match("%d+")
-                end
+        -- Skin lookup
+        local cosData = CosmeticData[name]
+        if cosData and cosData.Type == "Skin" then
+            baseName = tostring(cosData.ItemName or name)
+            local raw = cosData.Image or cosData.Icon
+                     or cosData.Thumbnail or cosData.Picture
+                     or cosData.ImageId
+            if raw then
+                raw = tostring(raw)
+                imageId = raw:match("^rbxassetid://") and raw
+                          or ("rbxassetid://" .. (raw:match("%d+") or ""))
             end
         end
 
-        -- Fall back to ItemLibrary for the base weapon icon
-        if not imageId and ItemLibrary then
-            local itemData = ItemLibrary[baseName]
-            if itemData and type(itemData) == "table" then
-                local raw = itemData.Image or itemData.Icon or itemData.Thumbnail
-                             or itemData.Picture or itemData.ImageId or nil
+        -- Base weapon image fallback
+        if not imageId then
+            local itemData = ItemData[baseName]
+            if type(itemData) == "table" then
+                local raw = itemData.Image or itemData.Icon
+                         or itemData.Thumbnail or itemData.Picture
+                         or itemData.ImageId
                 if raw then
-                    imageId = tostring(raw):match("^rbxassetid://") and tostring(raw)
-                              or "rbxassetid://" .. tostring(raw):match("%d+")
+                    raw = tostring(raw)
+                    imageId = raw:match("^rbxassetid://") and raw
+                              or ("rbxassetid://" .. (raw:match("%d+") or ""))
                 end
             end
         end
@@ -427,27 +423,30 @@ task.spawn(function()
         return baseName, imageId
     end
 
-    -- Build a slot→{baseName, imageId} lookup keyed by LayoutOrder
-    -- so we can match it to whichever child index the game assigns.
+    -- Build slot index → {baseName, imageId} lookup
     local slotData = {}
     for i, entry in ipairs(config.favoriteWeapons) do
         local slot = entry.LayoutOrder or i
         local baseName, imageId = resolveEntry(entry.Name)
         slotData[slot] = { baseName = baseName, imageId = imageId }
+        -- Debug — remove once confirmed working
+        print(string.format("[2c] slot %d  name=%s  base=%s  img=%s",
+            slot, entry.Name, baseName, tostring(imageId)))
     end
 
-    -- --------------------------------------------------------
-    -- Apply fixups to a rendered WeaponSlot child frame.
-    -- slotIndex matches the LayoutOrder the game assigned.
-    -- --------------------------------------------------------
-    local function fixSlot(child, slotIndex)
-        local data = slotData[slotIndex]
+    -- Apply Title + Picture fixes to a single WeaponSlot frame
+    local function fixSlot(child)
+        if not child:IsA("Frame") then return end
+        local slot = child.LayoutOrder
+        local data = slotData[slot]
         if not data then return end
 
         -- Title: base weapon name
-        local ok1, title = pcall(function() return child.Button.Title end)
-        if ok1 and title then
-            title.Text = data.baseName
+        local okT, title = pcall(function() return child.Button.Title end)
+        if okT and title then
+            if title.Text ~= data.baseName then
+                title.Text = data.baseName
+            end
             title:GetPropertyChangedSignal("Text"):Connect(function()
                 if title.Text ~= data.baseName then
                     title.Text = data.baseName
@@ -455,10 +454,10 @@ task.spawn(function()
             end)
         end
 
-        -- Picture: rbxassetid:// format icon
-        if data.imageId then
-            local ok2, picture = pcall(function() return child.Button.Icon.Picture end)
-            if ok2 and picture then
+        -- Picture: rbxassetid:// image
+        if data.imageId and data.imageId ~= "rbxassetid://" then
+            local okP, picture = pcall(function() return child.Button.Icon.Picture end)
+            if okP and picture then
                 picture.Image = data.imageId
                 picture:GetPropertyChangedSignal("Image"):Connect(function()
                     if picture.Image ~= data.imageId then
@@ -469,73 +468,50 @@ task.spawn(function()
         end
     end
 
-    -- --------------------------------------------------------
-    -- Watch MostPlayedWeapons. Apply fixups whenever the panel
-    -- opens (Active becomes visible) and whenever new slots appear.
-    -- --------------------------------------------------------
-    local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui",  15)
-    local MainGui     = PlayerGui:WaitForChild("MainGui",      15)
-    local Active      = MainGui:WaitForChild("MainFrame",      15)
-                              :WaitForChild("Pages",           15)
-                              :WaitForChild("ViewProfile",     15)
-                              :WaitForChild("Active",          15)
-    local MostPlayed  = Active:WaitForChild("Player",          15)
-                              :WaitForChild("MostPlayedWeapons", 15)
+    -- Wait for MostPlayedWeapons frame
+    local ok, MostPlayed = pcall(function()
+        return LocalPlayer.PlayerGui
+            :WaitForChild("MainGui",        15)
+            :WaitForChild("MainFrame",      15)
+            :WaitForChild("Pages",          15)
+            :WaitForChild("ViewProfile",    15)
+            :WaitForChild("Active",         15)
+            :WaitForChild("Player",         15)
+            :WaitForChild("MostPlayedWeapons", 15)
+    end)
 
-    local localHeadshotUrl = "https://www.roblox.com/headshot-thumbnail/image?userId="
-                             .. LocalPlayer.UserId .. "&width=420&height=420&format=png"
-
-    local function isLocalPlayerProfile()
-        local ok, hs = pcall(function()
-            return Active.Player.Headshot.Image
-        end)
-        if ok and hs == localHeadshotUrl then return true end
-        local ok2, un = pcall(function()
-            return Active.Player.Username.Text
-        end)
-        return ok2 and un == "@" .. localUsername
+    if not ok or not MostPlayed then
+        warn("[2c] MostPlayedWeapons not found")
+        return
     end
 
-    local function applyAllSlotFixes()
-        if not isLocalPlayerProfile() then return end
-        local children = MostPlayed:GetChildren()
-        -- GetChildren order matches LayoutOrder for sequentially-added frames
-        -- but we sort by LayoutOrder to be explicit
-        table.sort(children, function(a, b)
-            local la = pcall(function() return a.LayoutOrder end) and a.LayoutOrder or 0
-            local lb = pcall(function() return b.LayoutOrder end) and b.LayoutOrder or 0
-            return la < lb
-        end)
-        for _, child in ipairs(children) do
-            if child:IsA("Frame") then
-                local lo = child.LayoutOrder
-                if lo and lo > 0 then
-                    fixSlot(child, lo)
-                end
-            end
+    local Active = MostPlayed.Parent.Parent -- ViewProfile > Active
+
+    -- Fix all currently present slots
+    local function fixAllSlots()
+        for _, child in ipairs(MostPlayed:GetChildren()) do
+            fixSlot(child)
         end
     end
 
-    -- Run when panel opens
+    -- Run when panel becomes visible
     Active:GetPropertyChangedSignal("Visible"):Connect(function()
         if Active.Visible then
-            task.wait(0.1) -- let slots finish rendering
-            applyAllSlotFixes()
+            task.wait(0.15) -- let WeaponSlot finish rendering
+            fixAllSlots()
         end
     end)
 
-    -- Run when new slots are added (e.g. profile loads after panel opens)
+    -- Run when a new slot is added (handles async loading)
     MostPlayed.ChildAdded:Connect(function(child)
         task.wait(0.05)
-        if Active.Visible and isLocalPlayerProfile() and child:IsA("Frame") then
-            fixSlot(child, child.LayoutOrder)
-        end
+        fixSlot(child)
     end)
 
-    -- Run immediately in case profile is already open
+    -- Run immediately if already visible
     if Active.Visible then
-        task.wait(0.1)
-        applyAllSlotFixes()
+        task.wait(0.15)
+        fixAllSlots()
     end
 end)
 
