@@ -190,60 +190,111 @@ do
 end
 
 -- ============================================================
--- SECTION 0b — Player icon attribute spoof (PlayerList badge)
--- _UpdateIcon in PlayerListSlot reads these attributes directly
--- to decide which badge icon to show next to the player name.
--- Set config.playerIcon in your loader to one of:
---   "employee"   → Roblox employee star
---   "influencer" → Influencer/creator icon
---   "dev"        → Nosniy Games dev team icon (requires GroupRank)
---   "premium"    → Roblox Premium icon
---   nil / absent → no badge (default)
+-- SECTION 0b — Player icon spoof (PlayerList badge)
+-- Icons from _UpdateIcon in PlayerListSlot:
+--   "whitelist"  → { 0.45, "rbxassetid://89686341813708"  } debug whitelist
+--   "dev"        → { 0.625,"rbxassetid://140099562989635" } Nosniy Games team
+--   "employee"   → { 0.45, "rbxassetid://114408044569826" } Roblox employee
+--   "influencer" → { 0.6,  "rbxassetid://134084662516990" } Influencer
+--   "premium"    → { 0.5,  "rbxassetid://108431611670429" } Roblox Premium
+--   "blocked"    → { 0.4,  "rbxassetid://97625610157994"  } Blocked
+--   "friend"     → { 0.5,  "rbxassetid://118031781381166" } Friend
+--   "roblox"     → { 0.4,  "rbxassetid://105897927"       } UserId 261
+--   nil / absent → no badge
+-- Attribute-based icons (employee, influencer, dev) are set via
+-- attributes. All icons are also force-patched directly on the
+-- slot frame to cover read-only cases (premium, friend, etc).
 -- ============================================================
 do
-    if config.playerIcon then
-        local function applyIcon()
-            if config.playerIcon == "employee" then
-                LocalPlayer:SetAttribute("IsRobloxEmployee", true)
-                LocalPlayer:SetAttribute("IsInfluencer",     nil)
-                LocalPlayer:SetAttribute("DisableTeamVisuals", true)
-            elseif config.playerIcon == "influencer" then
-                LocalPlayer:SetAttribute("IsInfluencer",     true)
-                LocalPlayer:SetAttribute("IsRobloxEmployee", nil)
-                LocalPlayer:SetAttribute("DisableTeamVisuals", true)
-            elseif config.playerIcon == "dev" then
-                -- IsNosniyGamesTeamMemberRaw checks GroupRank attribute
-                -- lock DisableTeamVisuals to false so the check runs
-                LocalPlayer:SetAttribute("DisableTeamVisuals", false)
-                LocalPlayer:SetAttribute("IsRobloxEmployee", nil)
-                LocalPlayer:SetAttribute("IsInfluencer",     nil)
-            elseif config.playerIcon == "premium" then
-                LocalPlayer:SetAttribute("IsRobloxEmployee",  nil)
-                LocalPlayer:SetAttribute("IsInfluencer",      nil)
-                LocalPlayer:SetAttribute("DisableTeamVisuals", true)
-                -- MembershipType is read-only from Roblox — premium icon
-                -- only works if the account actually has Premium
-            end
+    local ICONS = {
+        whitelist  = { 0.45,  "rbxassetid://89686341813708"  },
+        dev        = { 0.625, "rbxassetid://140099562989635" },
+        employee   = { 0.45,  "rbxassetid://114408044569826" },
+        influencer = { 0.6,   "rbxassetid://134084662516990" },
+        premium    = { 0.5,   "rbxassetid://108431611670429" },
+        blocked    = { 0.4,   "rbxassetid://97625610157994"  },
+        friend     = { 0.5,   "rbxassetid://118031781381166" },
+        roblox     = { 0.4,   "rbxassetid://105897927"       },
+    }
+
+    local iconCfg = config.playerIcon and ICONS[config.playerIcon]
+    if iconCfg then
+        local iconSize  = iconCfg[1]
+        local iconImage = iconCfg[2]
+
+        -- Set attributes for attribute-driven icons
+        if config.playerIcon == "employee" then
+            LocalPlayer:SetAttribute("IsRobloxEmployee",   true)
+            LocalPlayer:SetAttribute("IsInfluencer",       nil)
+            LocalPlayer:SetAttribute("DisableTeamVisuals", true)
+            LocalPlayer:GetAttributeChangedSignal("IsRobloxEmployee"):Connect(function()
+                if LocalPlayer:GetAttribute("IsRobloxEmployee") ~= true then
+                    LocalPlayer:SetAttribute("IsRobloxEmployee", true)
+                end
+            end)
+        elseif config.playerIcon == "influencer" then
+            LocalPlayer:SetAttribute("IsInfluencer",       true)
+            LocalPlayer:SetAttribute("IsRobloxEmployee",   nil)
+            LocalPlayer:SetAttribute("DisableTeamVisuals", true)
+            LocalPlayer:GetAttributeChangedSignal("IsInfluencer"):Connect(function()
+                if LocalPlayer:GetAttribute("IsInfluencer") ~= true then
+                    LocalPlayer:SetAttribute("IsInfluencer", true)
+                end
+            end)
+        elseif config.playerIcon == "dev" then
+            LocalPlayer:SetAttribute("DisableTeamVisuals", false)
+            LocalPlayer:SetAttribute("IsRobloxEmployee",   nil)
+            LocalPlayer:SetAttribute("IsInfluencer",       nil)
         end
 
-        applyIcon()
-
-        -- Lock the relevant attributes against resets
-        local function lockAttr(name, value)
-            LocalPlayer:GetAttributeChangedSignal(name):Connect(function()
-                if LocalPlayer:GetAttribute(name) ~= value then
-                    LocalPlayer:SetAttribute(name, value)
+        -- Directly force the icon on the PlayerList slot frame.
+        -- This covers premium, friend, blocked, roblox, whitelist
+        -- and acts as a reliable fallback for all other types.
+        local function forceIcon(icon)
+            icon.Image = iconImage
+            icon.Size  = UDim2.new(iconSize, 0, iconSize, 0)
+            icon:GetPropertyChangedSignal("Image"):Connect(function()
+                if icon.Image ~= iconImage then
+                    icon.Image = iconImage
+                    icon.Size  = UDim2.new(iconSize, 0, iconSize, 0)
                 end
             end)
         end
 
-        if config.playerIcon == "employee" then
-            lockAttr("IsRobloxEmployee", true)
-        elseif config.playerIcon == "influencer" then
-            lockAttr("IsInfluencer", true)
-        elseif config.playerIcon == "dev" then
-            lockAttr("DisableTeamVisuals", false)
-        end
+        task.spawn(function()
+            -- Walk the PlayerList container and find the local player's slot
+            local PlayerGui = LocalPlayer:WaitForChild("PlayerGui", 15)
+            local MainGui   = PlayerGui:WaitForChild("MainGui",     15)
+            local Container = MainGui.PlayerList.Container.Elements.Container.Middle.List.Container
+
+            local function trySlot(frame)
+                if not (frame:IsA("Frame") or frame:IsA("ImageButton")) then return end
+                -- The slot's PlayerTitle text will be the spoofed display name
+                local ok, title = pcall(function()
+                    return frame.Player.Container.Title
+                end)
+                if not ok then return end
+                if title.Text == targetDisplayName or title.Text == localDisplayName then
+                    local okI, icon = pcall(function()
+                        return frame.Player.Container.Icon
+                    end)
+                    if okI and icon then
+                        forceIcon(icon)
+                    end
+                end
+            end
+
+            -- Patch existing slots
+            for _, child in ipairs(Container:GetDescendants()) do
+                pcall(trySlot, child)
+            end
+
+            -- Patch as new slots appear
+            Container.DescendantAdded:Connect(function(desc)
+                task.wait(0.05)
+                pcall(trySlot, desc)
+            end)
+        end)
     end
 end
 
