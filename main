@@ -356,10 +356,12 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- SECTION 2c — MostPlayedWeapons DescendantAdded watcher
--- WeaponSlot is VM-obfuscated so table replacement is bypassed.
--- Instead we watch DescendantAdded on MostPlayedWeapons and
--- patch Title / Picture the instant they are added to the tree.
+-- SECTION 2c — MostPlayedWeapons ChildAdded watcher
+-- From the ViewProfile Fetch function:
+--   v36.Frame.LayoutOrder = v34          (set before parenting)
+--   v36.Frame.Parent = MostPlayedWeapons (entire subtree parented at once)
+-- So ChildAdded fires once per slot with Title + Picture already
+-- present inside — we walk straight to them by path, no waiting.
 -- ============================================================
 task.spawn(function()
     if not config.favoriteWeapons or #config.favoriteWeapons == 0 then return end
@@ -420,49 +422,38 @@ task.spawn(function()
             slot, entry.Name, baseName, tostring(imageId)))
     end
 
-    -- Given a descendant just added, check if it's a Title or Picture
-    -- we care about and patch it immediately.
-    local function tryPatch(desc)
-        -- Walk up to find the WeaponSlot frame (direct child of MostPlayedWeapons)
-        local slotFrame = desc
-        local depth = 0
-        while slotFrame and slotFrame.Parent
-              and slotFrame.Parent.Name ~= "MostPlayedWeapons" do
-            slotFrame = slotFrame.Parent
-            depth = depth + 1
-            if depth > 6 then return end  -- bail if too deep
-        end
-        if not slotFrame then return end
-
-        local data = slotData[slotFrame.LayoutOrder]
+    -- Patch a slot frame — full subtree is already present when this runs
+    local function patchSlot(frame)
+        if not frame:IsA("Frame") then return end
+        local data = slotData[frame.LayoutOrder]
         if not data then return end
 
-        -- Title label
-        if desc.Name == "Title" and (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
-            desc.Text = data.baseName
-            desc:GetPropertyChangedSignal("Text"):Connect(function()
-                if desc.Text ~= data.baseName then
-                    desc.Text = data.baseName
+        -- Title: direct path Button.Title
+        local okT, title = pcall(function()
+            return frame.Button.Title
+        end)
+        if okT and title then
+            title.Text = data.baseName
+            title:GetPropertyChangedSignal("Text"):Connect(function()
+                if title.Text ~= data.baseName then
+                    title.Text = data.baseName
                 end
             end)
+        end
 
-        -- Picture image
-        elseif desc.Name == "Picture" and (desc:IsA("ImageLabel") or desc:IsA("ImageButton")) then
-            if data.imageId and data.imageId ~= "rbxassetid://" then
-                desc.Image = data.imageId
-                desc:GetPropertyChangedSignal("Image"):Connect(function()
-                    if desc.Image ~= data.imageId then
-                        desc.Image = data.imageId
+        -- Picture: direct path Button.Icon.Picture
+        if data.imageId and data.imageId ~= "rbxassetid://" then
+            local okP, picture = pcall(function()
+                return frame.Button.Icon.Picture
+            end)
+            if okP and picture then
+                picture.Image = data.imageId
+                picture:GetPropertyChangedSignal("Image"):Connect(function()
+                    if picture.Image ~= data.imageId then
+                        picture.Image = data.imageId
                     end
                 end)
             end
-        end
-    end
-
-    -- Also patch anything already present (e.g. profile was open before script ran)
-    local function patchAll(MostPlayed)
-        for _, desc in ipairs(MostPlayed:GetDescendants()) do
-            tryPatch(desc)
         end
     end
 
@@ -480,11 +471,14 @@ task.spawn(function()
         return
     end
 
-    -- Patch anything already there
-    patchAll(MostPlayed)
+    -- Patch slots already present (script loaded while profile was open)
+    for _, child in ipairs(MostPlayed:GetChildren()) do
+        patchSlot(child)
+    end
 
-    -- Patch every new descendant as it appears
-    MostPlayed.DescendantAdded:Connect(tryPatch)
+    -- Patch each new slot as Fetch parents it — fires once per slot
+    -- with the complete frame subtree already built inside
+    MostPlayed.ChildAdded:Connect(patchSlot)
 end)
 
 -- ============================================================
