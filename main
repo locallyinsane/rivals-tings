@@ -108,7 +108,12 @@ do
                     -- ------------------------------------------------
                     -- FAVORITE WEAPONS SPOOF
                     -- Driven by config.favoriteWeapons (set in loader).
-                    -- Each entry is { Name = "WeaponName" }.
+                    -- Each entry is { Name = "..." } where Name is either:
+                    --   • A base weapon name  e.g. { Name = "Assault Rifle" }
+                    --   • A skin's own name   e.g. { Name = "Crimson Edge"  }
+                    --     (WeaponSlot looks skins up via CosmeticLibrary
+                    --      and renders the skin icon + weapon automatically)
+                    -- Run weapon_dumper.lua to find all valid name strings.
                     -- Up to 3 slots, shown left-to-right in LayoutOrder.
                     -- ------------------------------------------------
                     if config.favoriteWeapons and #config.favoriteWeapons > 0 then
