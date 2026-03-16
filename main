@@ -190,6 +190,64 @@ do
 end
 
 -- ============================================================
+-- SECTION 0b — Player icon attribute spoof (PlayerList badge)
+-- _UpdateIcon in PlayerListSlot reads these attributes directly
+-- to decide which badge icon to show next to the player name.
+-- Set config.playerIcon in your loader to one of:
+--   "employee"   → Roblox employee star
+--   "influencer" → Influencer/creator icon
+--   "dev"        → Nosniy Games dev team icon (requires GroupRank)
+--   "premium"    → Roblox Premium icon
+--   nil / absent → no badge (default)
+-- ============================================================
+do
+    if config.playerIcon then
+        local function applyIcon()
+            if config.playerIcon == "employee" then
+                LocalPlayer:SetAttribute("IsRobloxEmployee", true)
+                LocalPlayer:SetAttribute("IsInfluencer",     nil)
+                LocalPlayer:SetAttribute("DisableTeamVisuals", true)
+            elseif config.playerIcon == "influencer" then
+                LocalPlayer:SetAttribute("IsInfluencer",     true)
+                LocalPlayer:SetAttribute("IsRobloxEmployee", nil)
+                LocalPlayer:SetAttribute("DisableTeamVisuals", true)
+            elseif config.playerIcon == "dev" then
+                -- IsNosniyGamesTeamMemberRaw checks GroupRank attribute
+                -- lock DisableTeamVisuals to false so the check runs
+                LocalPlayer:SetAttribute("DisableTeamVisuals", false)
+                LocalPlayer:SetAttribute("IsRobloxEmployee", nil)
+                LocalPlayer:SetAttribute("IsInfluencer",     nil)
+            elseif config.playerIcon == "premium" then
+                LocalPlayer:SetAttribute("IsRobloxEmployee",  nil)
+                LocalPlayer:SetAttribute("IsInfluencer",      nil)
+                LocalPlayer:SetAttribute("DisableTeamVisuals", true)
+                -- MembershipType is read-only from Roblox — premium icon
+                -- only works if the account actually has Premium
+            end
+        end
+
+        applyIcon()
+
+        -- Lock the relevant attributes against resets
+        local function lockAttr(name, value)
+            LocalPlayer:GetAttributeChangedSignal(name):Connect(function()
+                if LocalPlayer:GetAttribute(name) ~= value then
+                    LocalPlayer:SetAttribute(name, value)
+                end
+            end)
+        end
+
+        if config.playerIcon == "employee" then
+            lockAttr("IsRobloxEmployee", true)
+        elseif config.playerIcon == "influencer" then
+            lockAttr("IsInfluencer", true)
+        elseif config.playerIcon == "dev" then
+            lockAttr("DisableTeamVisuals", false)
+        end
+    end
+end
+
+-- ============================================================
 -- SECTION 1 — Nametag
 -- ============================================================
 task.spawn(function()
@@ -209,13 +267,17 @@ local function watchNametag(character)
     local hrp = character:WaitForChild("HumanoidRootPart", 10)
     if not hrp then return end
 
+    -- If targetDisplayName == targetUsername the game hides the username label
+    -- (sets it to "") — we must match that behaviour
+    local spoofedUsername = (targetDisplayName == targetUsername) and "" or "@" .. targetUsername
+
     local function applyToDesc(desc)
         if desc.Name == "DisplayName" and (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
             task.wait(0.1)
             desc.Text = targetDisplayName
         elseif desc.Name == "Username" and (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
             task.wait(0.1)
-            desc.Text = "@" .. targetUsername
+            desc.Text = spoofedUsername
         end
     end
 
@@ -423,8 +485,9 @@ task.spawn(function()
     end
 
     -- Patch a slot frame — full subtree is already present when this runs
+    -- Skip UIListLayout and any other non-Frame children
     local function patchSlot(frame)
-        if not frame:IsA("Frame") then return end
+        if not frame:IsA("Frame") or not frame:FindFirstChild("Button") then return end
         local data = slotData[frame.LayoutOrder]
         if not data then return end
 
@@ -457,12 +520,14 @@ task.spawn(function()
         end
     end
 
-    local MostPlayed = LocalPlayer.PlayerGui
+    local Active = LocalPlayer.PlayerGui
         :WaitForChild("MainGui",           15)
         :WaitForChild("MainFrame",         15)
         :WaitForChild("Pages",             15)
         :WaitForChild("ViewProfile",       15)
         :WaitForChild("Active",            15)
+
+    local MostPlayed = Active
         :WaitForChild("Player",            15)
         :WaitForChild("MostPlayedWeapons", 15)
 
@@ -471,14 +536,31 @@ task.spawn(function()
         return
     end
 
-    -- Patch slots already present (script loaded while profile was open)
-    for _, child in ipairs(MostPlayed:GetChildren()) do
-        patchSlot(child)
+    -- Check if the profile currently open belongs to the local player.
+    -- Section 2 already spoofed the username/headshot so we compare
+    -- against the spoofed target values, not the raw local ones.
+    local UsernameLabel = Active:WaitForChild("Player", 10)
+                                :WaitForChild("Username", 10)
+
+    local function isViewingLocalPlayer()
+        if not UsernameLabel then return false end
+        return UsernameLabel.Text == "@" .. targetUsername
+            or UsernameLabel.Text == "@" .. localUsername
     end
 
-    -- Patch each new slot as Fetch parents it — fires once per slot
-    -- with the complete frame subtree already built inside
-    MostPlayed.ChildAdded:Connect(patchSlot)
+    -- Patch slots already present (script loaded while profile was open)
+    if isViewingLocalPlayer() then
+        for _, child in ipairs(MostPlayed:GetChildren()) do
+            patchSlot(child)
+        end
+    end
+
+    -- Patch each new slot as Fetch parents it — only when it's our profile
+    MostPlayed.ChildAdded:Connect(function(child)
+        if isViewingLocalPlayer() then
+            patchSlot(child)
+        end
+    end)
 end)
 
 -- ============================================================
