@@ -356,13 +356,11 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- SECTION 2c — WeaponSlot.new hook
--- Hooks WeaponSlot.new so that Title and Picture.Image are
--- correct at creation time — no UI patching delay.
--- For each slot created with a name matching our favoriteWeapons
--- config we immediately set:
---   • Button.Title.Text  → base weapon name (resolved from skin if needed)
---   • Button.Icon.Picture.Image → rbxassetid:// format icon
+-- SECTION 2c — WeaponSlot.new table replacement
+-- ViewProfile calls v_u_15.new(name, data) where v_u_15 is the
+-- cached require() of WeaponSlot. Because it's a table lookup
+-- each call we just replace .new directly on the table — no
+-- hookfunction needed, works reliably in exploit environments.
 -- ============================================================
 task.spawn(function()
     if not config.favoriteWeapons or #config.favoriteWeapons == 0 then return end
@@ -374,16 +372,18 @@ task.spawn(function()
     local ItemData     = {}
     pcall(function()
         local lib = require(RS.Modules.CosmeticLibrary)
-        CosmeticData = (type(lib) == "table" and type(lib.Cosmetics) == "table")
-                       and lib.Cosmetics or (type(lib) == "table" and lib or {})
+        if type(lib) == "table" then
+            CosmeticData = type(lib.Cosmetics) == "table" and lib.Cosmetics or lib
+        end
     end)
     pcall(function()
         local lib = require(RS.Modules.ItemLibrary)
-        ItemData = (type(lib) == "table" and type(lib.Items) == "table")
-                   and lib.Items or (type(lib) == "table" and lib or {})
+        if type(lib) == "table" then
+            ItemData = type(lib.Items) == "table" and lib.Items or lib
+        end
     end)
 
-    -- Resolve a Name string → { baseName, imageId }
+    -- Resolve Name → { baseName, imageId }
     local function resolveEntry(name)
         local baseName = name
         local imageId  = nil
@@ -416,7 +416,7 @@ task.spawn(function()
         return baseName, imageId
     end
 
-    -- Build a Name → {baseName, imageId} lookup for fast access in the hook
+    -- Build Name → resolved lookup
     local nameToResolved = {}
     for i, entry in ipairs(config.favoriteWeapons) do
         local baseName, imageId = resolveEntry(entry.Name)
@@ -425,27 +425,27 @@ task.spawn(function()
             entry.LayoutOrder or i, entry.Name, baseName, tostring(imageId)))
     end
 
-    -- Wait for WeaponSlot module to be loaded
+    -- Get the module table — same cached table ViewProfile holds
     local WeaponSlot = require(
         LocalPlayer.PlayerScripts.Modules:WaitForChild("WeaponSlot")
     )
 
-    local originalNew = clonefunction(WeaponSlot.new)
-    hookfunction(WeaponSlot.new, newcclosure(function(name, data)
-        -- Call the original constructor first
+    -- Store original and replace directly on the table
+    local originalNew = WeaponSlot.new
+    WeaponSlot.new = newcclosure(function(name, data)
         local slot = originalNew(name, data)
 
-        -- Check if this name is one we're spoofing
         local resolved = nameToResolved[name]
         if not resolved or not slot then
             return slot
         end
 
-        -- Apply immediately — frame exists but is not yet parented
-        local ok1, title = pcall(function() return slot.Frame.Button.Title end)
-        if ok1 and title then
+        -- Patch Title
+        local okT, title = pcall(function()
+            return slot.Frame.Button.Title
+        end)
+        if okT and title then
             title.Text = resolved.baseName
-            -- Lock against the module resetting it after construction
             title:GetPropertyChangedSignal("Text"):Connect(function()
                 if title.Text ~= resolved.baseName then
                     title.Text = resolved.baseName
@@ -453,9 +453,12 @@ task.spawn(function()
             end)
         end
 
+        -- Patch Picture
         if resolved.imageId and resolved.imageId ~= "rbxassetid://" then
-            local ok2, picture = pcall(function() return slot.Frame.Button.Icon.Picture end)
-            if ok2 and picture then
+            local okP, picture = pcall(function()
+                return slot.Frame.Button.Icon.Picture
+            end)
+            if okP and picture then
                 picture.Image = resolved.imageId
                 picture:GetPropertyChangedSignal("Image"):Connect(function()
                     if picture.Image ~= resolved.imageId then
@@ -466,7 +469,7 @@ task.spawn(function()
         end
 
         return slot
-    end))
+    end)
 end)
 
 -- ============================================================
