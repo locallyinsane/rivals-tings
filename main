@@ -356,48 +356,43 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- SECTION 2c — MostPlayedWeapons slot fixup
--- Overrides Title (base weapon name) and Picture.Image
--- (rbxassetid:// format) on each rendered WeaponSlot whenever
--- the ViewProfile panel is visible.
--- Note: no local-player detection needed — Section 0 already
--- ensures FavoriteWeapons is only spoofed for the local player.
+-- SECTION 2c — WeaponSlot.new hook
+-- Hooks WeaponSlot.new so that Title and Picture.Image are
+-- correct at creation time — no UI patching delay.
+-- For each slot created with a name matching our favoriteWeapons
+-- config we immediately set:
+--   • Button.Title.Text  → base weapon name (resolved from skin if needed)
+--   • Button.Icon.Picture.Image → rbxassetid:// format icon
 -- ============================================================
 task.spawn(function()
     if not config.favoriteWeapons or #config.favoriteWeapons == 0 then return end
 
     local RS = game:GetService("ReplicatedStorage")
 
-    -- Load CosmeticLibrary to resolve skin → base weapon name
+    -- Load CosmeticLibrary and ItemLibrary
     local CosmeticData = {}
+    local ItemData     = {}
     pcall(function()
         local lib = require(RS.Modules.CosmeticLibrary)
-        if type(lib) == "table" then
-            CosmeticData = type(lib.Cosmetics) == "table" and lib.Cosmetics or lib
-        end
+        CosmeticData = (type(lib) == "table" and type(lib.Cosmetics) == "table")
+                       and lib.Cosmetics or (type(lib) == "table" and lib or {})
     end)
-
-    -- Load ItemLibrary to resolve base weapon → image asset ID
-    local ItemData = {}
     pcall(function()
         local lib = require(RS.Modules.ItemLibrary)
-        if type(lib) == "table" then
-            ItemData = type(lib.Items) == "table" and lib.Items or lib
-        end
+        ItemData = (type(lib) == "table" and type(lib.Items) == "table")
+                   and lib.Items or (type(lib) == "table" and lib or {})
     end)
 
-    -- For a Name string resolve baseName and rbxassetid:// imageId
+    -- Resolve a Name string → { baseName, imageId }
     local function resolveEntry(name)
         local baseName = name
         local imageId  = nil
 
-        -- Skin lookup
         local cosData = CosmeticData[name]
         if cosData and cosData.Type == "Skin" then
             baseName = tostring(cosData.ItemName or name)
             local raw = cosData.Image or cosData.Icon
-                     or cosData.Thumbnail or cosData.Picture
-                     or cosData.ImageId
+                     or cosData.Thumbnail or cosData.Picture or cosData.ImageId
             if raw then
                 raw = tostring(raw)
                 imageId = raw:match("^rbxassetid://") and raw
@@ -405,13 +400,11 @@ task.spawn(function()
             end
         end
 
-        -- Base weapon image fallback
         if not imageId then
             local itemData = ItemData[baseName]
             if type(itemData) == "table" then
                 local raw = itemData.Image or itemData.Icon
-                         or itemData.Thumbnail or itemData.Picture
-                         or itemData.ImageId
+                         or itemData.Thumbnail or itemData.Picture or itemData.ImageId
                 if raw then
                     raw = tostring(raw)
                     imageId = raw:match("^rbxassetid://") and raw
@@ -423,96 +416,57 @@ task.spawn(function()
         return baseName, imageId
     end
 
-    -- Build slot index → {baseName, imageId} lookup
-    local slotData = {}
+    -- Build a Name → {baseName, imageId} lookup for fast access in the hook
+    local nameToResolved = {}
     for i, entry in ipairs(config.favoriteWeapons) do
-        local slot = entry.LayoutOrder or i
         local baseName, imageId = resolveEntry(entry.Name)
-        slotData[slot] = { baseName = baseName, imageId = imageId }
-        -- Debug — remove once confirmed working
-        print(string.format("[2c] slot %d  name=%s  base=%s  img=%s",
-            slot, entry.Name, baseName, tostring(imageId)))
+        nameToResolved[entry.Name] = { baseName = baseName, imageId = imageId }
+        print(string.format("[2c] slot %d  name=%-22s  base=%-22s  img=%s",
+            entry.LayoutOrder or i, entry.Name, baseName, tostring(imageId)))
     end
 
-    -- Apply Title + Picture fixes to a single WeaponSlot frame
-    local function fixSlot(child)
-        if not child:IsA("Frame") then return end
-        local slot = child.LayoutOrder
-        local data = slotData[slot]
-        if not data then return end
+    -- Wait for WeaponSlot module to be loaded
+    local WeaponSlot = require(
+        LocalPlayer.PlayerScripts.Modules:WaitForChild("WeaponSlot")
+    )
 
-        -- Title: base weapon name
-        local okT, title = pcall(function() return child.Button.Title end)
-        if okT and title then
-            if title.Text ~= data.baseName then
-                title.Text = data.baseName
-            end
+    local originalNew = clonefunction(WeaponSlot.new)
+    hookfunction(WeaponSlot.new, newcclosure(function(name, data)
+        -- Call the original constructor first
+        local slot = originalNew(name, data)
+
+        -- Check if this name is one we're spoofing
+        local resolved = nameToResolved[name]
+        if not resolved or not slot then
+            return slot
+        end
+
+        -- Apply immediately — frame exists but is not yet parented
+        local ok1, title = pcall(function() return slot.Frame.Button.Title end)
+        if ok1 and title then
+            title.Text = resolved.baseName
+            -- Lock against the module resetting it after construction
             title:GetPropertyChangedSignal("Text"):Connect(function()
-                if title.Text ~= data.baseName then
-                    title.Text = data.baseName
+                if title.Text ~= resolved.baseName then
+                    title.Text = resolved.baseName
                 end
             end)
         end
 
-        -- Picture: rbxassetid:// image
-        if data.imageId and data.imageId ~= "rbxassetid://" then
-            local okP, picture = pcall(function() return child.Button.Icon.Picture end)
-            if okP and picture then
-                picture.Image = data.imageId
+        if resolved.imageId and resolved.imageId ~= "rbxassetid://" then
+            local ok2, picture = pcall(function() return slot.Frame.Button.Icon.Picture end)
+            if ok2 and picture then
+                picture.Image = resolved.imageId
                 picture:GetPropertyChangedSignal("Image"):Connect(function()
-                    if picture.Image ~= data.imageId then
-                        picture.Image = data.imageId
+                    if picture.Image ~= resolved.imageId then
+                        picture.Image = resolved.imageId
                     end
                 end)
             end
         end
-    end
 
-    -- Wait for MostPlayedWeapons frame
-    local ok, MostPlayed = pcall(function()
-        return LocalPlayer.PlayerGui
-            :WaitForChild("MainGui",        15)
-            :WaitForChild("MainFrame",      15)
-            :WaitForChild("Pages",          15)
-            :WaitForChild("ViewProfile",    15)
-            :WaitForChild("Active",         15)
-            :WaitForChild("Player",         15)
-            :WaitForChild("MostPlayedWeapons", 15)
-    end)
-
-    if not ok or not MostPlayed then
-        warn("[2c] MostPlayedWeapons not found")
-        return
-    end
-
-    local Active = MostPlayed.Parent.Parent -- ViewProfile > Active
-
-    -- Fix all currently present slots
-    local function fixAllSlots()
-        for _, child in ipairs(MostPlayed:GetChildren()) do
-            fixSlot(child)
-        end
-    end
-
-    -- Run when panel becomes visible
-    Active:GetPropertyChangedSignal("Visible"):Connect(function()
-        if Active.Visible then
-            task.wait(0.15) -- let WeaponSlot finish rendering
-            fixAllSlots()
-        end
-    end)
-
-    -- Run when a new slot is added (handles async loading)
-    MostPlayed.ChildAdded:Connect(function(child)
-        task.wait(0.05)
-        fixSlot(child)
-    end)
-
-    -- Run immediately if already visible
-    if Active.Visible then
-        task.wait(0.15)
-        fixAllSlots()
-    end
+        return slot
+    end))
 end)
 
 -- ============================================================
