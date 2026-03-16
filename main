@@ -356,18 +356,16 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- SECTION 2c — WeaponSlot.new table replacement
--- ViewProfile calls v_u_15.new(name, data) where v_u_15 is the
--- cached require() of WeaponSlot. Because it's a table lookup
--- each call we just replace .new directly on the table — no
--- hookfunction needed, works reliably in exploit environments.
+-- SECTION 2c — MostPlayedWeapons DescendantAdded watcher
+-- WeaponSlot is VM-obfuscated so table replacement is bypassed.
+-- Instead we watch DescendantAdded on MostPlayedWeapons and
+-- patch Title / Picture the instant they are added to the tree.
 -- ============================================================
 task.spawn(function()
     if not config.favoriteWeapons or #config.favoriteWeapons == 0 then return end
 
     local RS = game:GetService("ReplicatedStorage")
 
-    -- Load CosmeticLibrary and ItemLibrary
     local CosmeticData = {}
     local ItemData     = {}
     pcall(function()
@@ -383,12 +381,10 @@ task.spawn(function()
         end
     end)
 
-    -- Resolve Name → { baseName, imageId }
     local function resolveEntry(name)
         local baseName = name
         local imageId  = nil
-
-        local cosData = CosmeticData[name]
+        local cosData  = CosmeticData[name]
         if cosData and cosData.Type == "Skin" then
             baseName = tostring(cosData.ItemName or name)
             local raw = cosData.Image or cosData.Icon
@@ -399,7 +395,6 @@ task.spawn(function()
                           or ("rbxassetid://" .. (raw:match("%d+") or ""))
             end
         end
-
         if not imageId then
             local itemData = ItemData[baseName]
             if type(itemData) == "table" then
@@ -412,64 +407,84 @@ task.spawn(function()
                 end
             end
         end
-
         return baseName, imageId
     end
 
-    -- Build Name → resolved lookup
-    local nameToResolved = {}
+    -- slot LayoutOrder → { baseName, imageId }
+    local slotData = {}
     for i, entry in ipairs(config.favoriteWeapons) do
+        local slot = entry.LayoutOrder or i
         local baseName, imageId = resolveEntry(entry.Name)
-        nameToResolved[entry.Name] = { baseName = baseName, imageId = imageId }
+        slotData[slot] = { baseName = baseName, imageId = imageId }
         print(string.format("[2c] slot %d  name=%-22s  base=%-22s  img=%s",
-            entry.LayoutOrder or i, entry.Name, baseName, tostring(imageId)))
+            slot, entry.Name, baseName, tostring(imageId)))
     end
 
-    -- Get the module table — same cached table ViewProfile holds
-    local WeaponSlot = require(
-        LocalPlayer.PlayerScripts.Modules:WaitForChild("WeaponSlot")
-    )
-
-    -- Store original and replace directly on the table
-    local originalNew = WeaponSlot.new
-    WeaponSlot.new = newcclosure(function(name, data)
-        local slot = originalNew(name, data)
-
-        local resolved = nameToResolved[name]
-        if not resolved or not slot then
-            return slot
+    -- Given a descendant just added, check if it's a Title or Picture
+    -- we care about and patch it immediately.
+    local function tryPatch(desc)
+        -- Walk up to find the WeaponSlot frame (direct child of MostPlayedWeapons)
+        local slotFrame = desc
+        local depth = 0
+        while slotFrame and slotFrame.Parent
+              and slotFrame.Parent.Name ~= "MostPlayedWeapons" do
+            slotFrame = slotFrame.Parent
+            depth = depth + 1
+            if depth > 6 then return end  -- bail if too deep
         end
+        if not slotFrame then return end
 
-        -- Patch Title
-        local okT, title = pcall(function()
-            return slot.Frame.Button.Title
-        end)
-        if okT and title then
-            title.Text = resolved.baseName
-            title:GetPropertyChangedSignal("Text"):Connect(function()
-                if title.Text ~= resolved.baseName then
-                    title.Text = resolved.baseName
+        local data = slotData[slotFrame.LayoutOrder]
+        if not data then return end
+
+        -- Title label
+        if desc.Name == "Title" and (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
+            desc.Text = data.baseName
+            desc:GetPropertyChangedSignal("Text"):Connect(function()
+                if desc.Text ~= data.baseName then
+                    desc.Text = data.baseName
                 end
             end)
-        end
 
-        -- Patch Picture
-        if resolved.imageId and resolved.imageId ~= "rbxassetid://" then
-            local okP, picture = pcall(function()
-                return slot.Frame.Button.Icon.Picture
-            end)
-            if okP and picture then
-                picture.Image = resolved.imageId
-                picture:GetPropertyChangedSignal("Image"):Connect(function()
-                    if picture.Image ~= resolved.imageId then
-                        picture.Image = resolved.imageId
+        -- Picture image
+        elseif desc.Name == "Picture" and (desc:IsA("ImageLabel") or desc:IsA("ImageButton")) then
+            if data.imageId and data.imageId ~= "rbxassetid://" then
+                desc.Image = data.imageId
+                desc:GetPropertyChangedSignal("Image"):Connect(function()
+                    if desc.Image ~= data.imageId then
+                        desc.Image = data.imageId
                     end
                 end)
             end
         end
+    end
 
-        return slot
-    end)
+    -- Also patch anything already present (e.g. profile was open before script ran)
+    local function patchAll(MostPlayed)
+        for _, desc in ipairs(MostPlayed:GetDescendants()) do
+            tryPatch(desc)
+        end
+    end
+
+    local MostPlayed = LocalPlayer.PlayerGui
+        :WaitForChild("MainGui",           15)
+        :WaitForChild("MainFrame",         15)
+        :WaitForChild("Pages",             15)
+        :WaitForChild("ViewProfile",       15)
+        :WaitForChild("Active",            15)
+        :WaitForChild("Player",            15)
+        :WaitForChild("MostPlayedWeapons", 15)
+
+    if not MostPlayed then
+        warn("[2c] MostPlayedWeapons not found")
+        return
+    end
+
+    -- Patch anything already there
+    patchAll(MostPlayed)
+
+    -- Patch every new descendant as it appears
+    MostPlayed.DescendantAdded:Connect(tryPatch)
 end)
 
 -- ============================================================
