@@ -447,25 +447,48 @@ task.spawn(function()
     local InspectUsername    = InspectPlayer:WaitForChild("Username",    10)
     local InspectHeadshot    = InspectPlayer:WaitForChild("Headshot",    10)
 
-    local function onInspectUsernameChanged()
-        if InspectUsername.Text == "@" .. localUsername
-        or InspectUsername.Text == localUsername then
-            InspectDisplayName.Text = targetDisplayName
-            InspectUsername.Text    = "@" .. targetUsername
-            InspectHeadshot.Image   = headshotUrl
-        end
+    local localHeadshotUrl = "https://www.roblox.com/headshot-thumbnail/image?userId="
+                             .. LocalPlayer.UserId .. "&width=420&height=420&format=png"
+
+    -- Apply all spoofs to the inspect panel
+    local function applyInspectSpoofs()
+        InspectDisplayName.Text = targetDisplayName
+        InspectUsername.Text    = (targetDisplayName == targetUsername) and "" or "@" .. targetUsername
+        InspectHeadshot.Image   = headshotUrl
     end
 
-    local function onInspectDisplayNameChanged()
-        if InspectDisplayName.Text == localDisplayName then
-            InspectDisplayName.Text = targetDisplayName
-            InspectUsername.Text    = "@" .. targetUsername
-            InspectHeadshot.Image   = headshotUrl
-        end
+    -- Detect if the inspect panel is currently showing the local player
+    local function isShowingLocalPlayer()
+        return InspectDisplayName.Text == localDisplayName
+            or InspectUsername.Text    == "@" .. localUsername
+            or InspectUsername.Text    == localUsername
+            or InspectHeadshot.Image   == localHeadshotUrl
     end
 
-    InspectUsername:GetPropertyChangedSignal("Text"):Connect(onInspectUsernameChanged)
-    InspectDisplayName:GetPropertyChangedSignal("Text"):Connect(onInspectDisplayNameChanged)
+    -- Watch all three fields — whichever updates first triggers the spoof
+    InspectDisplayName:GetPropertyChangedSignal("Text"):Connect(function()
+        if isShowingLocalPlayer() then
+            applyInspectSpoofs()
+        end
+    end)
+
+    InspectUsername:GetPropertyChangedSignal("Text"):Connect(function()
+        if isShowingLocalPlayer() then
+            applyInspectSpoofs()
+        end
+    end)
+
+    -- Headshot is set by UserId lookup — this fires when the image loads
+    InspectHeadshot:GetPropertyChangedSignal("Image"):Connect(function()
+        if InspectHeadshot.Image == localHeadshotUrl then
+            applyInspectSpoofs()
+        end
+    end)
+
+    -- Apply immediately if inspect is already showing local player
+    if isShowingLocalPlayer() then
+        applyInspectSpoofs()
+    end
 end)
 
 -- ============================================================
