@@ -453,7 +453,7 @@ task.spawn(function()
     -- Apply all spoofs to the inspect panel
     local function applyInspectSpoofs()
         InspectDisplayName.Text = targetDisplayName
-        InspectUsername.Text    = (targetDisplayName == targetUsername) and "" or "@" .. targetUsername
+        InspectUsername.Text    = "@" .. targetUsername
         InspectHeadshot.Image   = headshotUrl
     end
 
@@ -807,6 +807,101 @@ task.spawn(function()
 
     -- Apply immediately and lock against resets
     spoofImage(icon, headshotUrl)
+end)
+
+-- ============================================================
+-- SECTION 4c — Additional headshot / username locations
+-- Covers Party page, SideParty slot, and Equipment slot.
+-- All paths are optional — handled gracefully if not present.
+-- ============================================================
+task.spawn(function()
+    local PlayerGui = LocalPlayer:WaitForChild("PlayerGui", 15)
+    local MainGui   = PlayerGui:WaitForChild("MainGui",     15)
+    local MainFrame = MainGui:WaitForChild("MainFrame",     15)
+
+    -- Reusable: lock an ImageLabel to headshotUrl
+    local function lockHeadshot(img)
+        if not img then return end
+        img.Image = headshotUrl
+        img:GetPropertyChangedSignal("Image"):Connect(function()
+            if img.Image ~= headshotUrl then
+                img.Image = headshotUrl
+            end
+        end)
+    end
+
+    -- Reusable: lock a TextLabel to a value
+    local function lockText(lbl, value)
+        if not lbl then return end
+        lbl.Text = value
+        lbl:GetPropertyChangedSignal("Text"):Connect(function()
+            if lbl.Text ~= value then
+                lbl.Text = value
+            end
+        end)
+    end
+
+    -- Safely walk a path of WaitForChild calls with a short timeout
+    -- Returns the final instance or nil on failure
+    local function safePath(root, ...)
+        local cur = root
+        for _, name in ipairs({...}) do
+            local ok, child = pcall(function()
+                return cur:WaitForChild(name, 5)
+            end)
+            if not ok or not child then return nil end
+            cur = child
+        end
+        return cur
+    end
+
+    -- --------------------------------------------------------
+    -- Party page — PartyMemberBigSlot Username + Icon
+    -- MainFrame.Pages.Party.Members.PartyMemberBigSlot
+    -- --------------------------------------------------------
+    task.spawn(function()
+        local slot = safePath(MainFrame,
+            "Pages", "Party", "Members", "PartyMemberBigSlot")
+        if not slot then return end
+
+        -- Username label
+        local username = safePath(slot, "Username")
+        if username then
+            lockText(username, "@" .. targetUsername)
+        end
+
+        -- Icon headshot
+        local icon = safePath(slot, "Icon")
+        if icon then
+            lockHeadshot(icon)
+        end
+    end)
+
+    -- --------------------------------------------------------
+    -- SideParty slot — Button.Icon headshot
+    -- MainFrame.Pages.SideParty.Container.PartyMemberSlot.Button.Icon
+    -- --------------------------------------------------------
+    task.spawn(function()
+        local icon = safePath(MainFrame,
+            "Pages", "SideParty", "Container",
+            "PartyMemberSlot", "Button", "Icon")
+        if not icon then return end
+        lockHeadshot(icon)
+    end)
+
+    -- --------------------------------------------------------
+    -- Equipment slot — Button.Icon headshot
+    -- MainFrame.Equipment.Left.List.Container
+    --   .EquipmentClassSlot.Container.EquipmentButtonSlot.Button.Icon
+    -- --------------------------------------------------------
+    task.spawn(function()
+        local icon = safePath(MainFrame,
+            "Equipment", "Left", "List", "Container",
+            "EquipmentClassSlot", "Container",
+            "EquipmentButtonSlot", "Button", "Icon")
+        if not icon then return end
+        lockHeadshot(icon)
+    end)
 end)
 
 -- ============================================================
