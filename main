@@ -323,123 +323,83 @@ end)
 
 -- ============================================================
 -- SECTION 3 — PlayerList
+-- _UpdateLeaderstat reads Player.CustomLeaderstats[name].Value
+-- directly. We spoof the Value on that object so the module
+-- reads our config value naturally, no GUI label fighting needed.
+-- Name/username labels are handled by processDesc as before.
 -- ============================================================
 task.spawn(function()
     local PlayerGui  = LocalPlayer:WaitForChild("PlayerGui", 15)
     local MainGui    = PlayerGui:WaitForChild("MainGui",     15)
     local Container  = MainGui.PlayerList.Container.Elements.Container.Middle.List.Container
 
-    -- Keep a reference to all active leaderstat title labels we own
-    -- so we can update them whenever config.winStreak increments.
-    local leaderstatTitles = {}
-
-    local function applyToTitle(title)
-        if not title then return end
-        -- Check if already tracked
-        for _, t in ipairs(leaderstatTitles) do
-            if t == title then return end
-        end
-        title.Text = tostring(config.winStreak)
-        table.insert(leaderstatTitles, title)
-        title:GetPropertyChangedSignal("Text"):Connect(function()
-            if title.Text ~= tostring(config.winStreak) then
-                title.Text = tostring(config.winStreak)
+    -- --------------------------------------------------------
+    -- Spoof CustomLeaderstats values on LocalPlayer.
+    -- The module reads the .Value of whichever child name is
+    -- set as the leaderstat. We lock streak-related ones.
+    -- --------------------------------------------------------
+    local function lockLeaderstatValue(obj, value)
+        if not obj then return end
+        obj.Value = value
+        obj:GetPropertyChangedSignal("Value"):Connect(function()
+            if obj.Value ~= value then
+                obj.Value = value
             end
         end)
     end
 
-    local function spoofLeaderstat(slot)
-        -- Try immediately
-        local leaderstat = slot:FindFirstChild("Leaderstat")
-        if leaderstat then
-            local title = leaderstat:FindFirstChild("Title")
-            if title then
-                applyToTitle(title)
-                return
+    local function setupCustomLeaderstats(customLS)
+        -- Lock any streak-related leaderstat children
+        local function tryLock(child)
+            local n = child.Name
+            if n == "Win Streak" or n == "WinStreak"
+            or n == "Current Win Streak" or n == "StatisticDuelsWinStreak" then
+                lockLeaderstatValue(child, config.winStreak)
+                table.insert(onStreakIncremented, function()
+                    lockLeaderstatValue(child, config.winStreak)
+                end)
             end
         end
-        -- Leaderstat not present yet — watch for it to appear
-        slot.DescendantAdded:Connect(function(desc)
-            if desc.Name == "Title" and desc.Parent and desc.Parent.Name == "Leaderstat" then
-                task.wait() -- let game write its value first
-                applyToTitle(desc)
+
+        for _, child in ipairs(customLS:GetChildren()) do
+            tryLock(child)
+        end
+        customLS.ChildAdded:Connect(function(child)
+            task.wait()
+            tryLock(child)
+        end)
+    end
+
+    local customLS = LocalPlayer:FindFirstChild("CustomLeaderstats")
+    if customLS then
+        setupCustomLeaderstats(customLS)
+    else
+        LocalPlayer.ChildAdded:Connect(function(child)
+            if child.Name == "CustomLeaderstats" then
+                setupCustomLeaderstats(child)
             end
         end)
     end
 
-    -- Called externally whenever config.winStreak increments
-    -- so all visible leaderstat titles update immediately.
-    local function refreshLeaderstats()
-        for i = #leaderstatTitles, 1, -1 do
-            local title = leaderstatTitles[i]
-            if not title or not title.Parent then
-                table.remove(leaderstatTitles, i)
-            else
-                title.Text = tostring(config.winStreak)
-            end
-        end
-    end
-
-    -- Register refresh so Section 0 can call it after incrementing config.winStreak
-    table.insert(onStreakIncremented, refreshLeaderstats)
-
-    -- Check if a slot belongs to the local player (by display name or username)
-    local function isOurSlot(slot)
-        local dn = slot:FindFirstChild("DisplayName", true)
-        if dn and (dn.Text == localDisplayName or dn.Text == targetDisplayName) then
-            return true
-        end
-        local un = slot:FindFirstChild("Username", true)
-        if un and (un.Text == localUsername or un.Text == "@" .. localUsername
-                or un.Text == targetUsername or un.Text == "@" .. targetUsername) then
-            return true
-        end
-        return false
-    end
-
+    -- --------------------------------------------------------
+    -- Name labels in the list
+    -- --------------------------------------------------------
     local function processDesc(desc)
         if desc:IsA("TextLabel") or desc:IsA("TextButton") or desc:IsA("TextBox") then
             local t = desc.Text
             if t == localDisplayName then
                 spoofText(desc, targetDisplayName)
-                -- Walk up to slot and spoof its leaderstat
-                local slot = desc.Parent and desc.Parent.Parent
-                if slot then task.spawn(spoofLeaderstat, slot) end
-
             elseif t == localUsername then
                 spoofText(desc, targetUsername)
             elseif t == "@" .. localUsername then
                 spoofText(desc, "@" .. targetUsername)
-
-            elseif desc.Name == "Title" and desc.Parent
-            and desc.Parent.Name == "Leaderstat" then
-                local slot = desc.Parent.Parent
-                if slot and isOurSlot(slot) then
-                    spoofLeaderstat(slot)
-                end
             end
         end
-    end
-
-    -- Also watch for our slot's leaderstat title being set after display name
-    -- is already spoofed to targetDisplayName
-    local function processSlot(slot)
-        if not isOurSlot(slot) then return end
-        spoofLeaderstat(slot)
-    end
-
-    for _, child in ipairs(Container:GetChildren()) do
-        task.spawn(processSlot, child)
     end
 
     for _, desc in ipairs(Container:GetDescendants()) do
         processDesc(desc)
     end
-
-    Container.ChildAdded:Connect(function(child)
-        task.wait(0.1) -- let slot populate fully
-        processSlot(child)
-    end)
 
     Container.DescendantAdded:Connect(function(desc)
         task.wait(0.05)
