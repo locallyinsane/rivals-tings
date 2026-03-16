@@ -107,22 +107,13 @@ do
 
                     -- ------------------------------------------------
                     -- FAVORITE WEAPONS SPOOF
-                    -- Replace result.FavoriteWeapons with your own list.
-                    -- Each entry needs at minimum a "Name" field matching
-                    -- an exact weapon name string from ItemLibrary.
-                    -- Example structure (uncomment and edit to use):
-                    --
-                    -- result.FavoriteWeapons = {
-                    --     { Name = "Katana" },
-                    --     { Name = "Spear"  },
-                    --     { Name = "Sword"  },
-                    -- }
-                    --
-                    -- To find valid weapon name strings, check:
-                    -- game.ReplicatedStorage.Modules.ItemLibrary  (server-side table keys)
-                    -- or print all keys from ItemLibrary in a local script:
-                    --   for k, _ in pairs(require(RS.Modules.ItemLibrary)) do print(k) end
+                    -- Driven by config.favoriteWeapons (set in loader).
+                    -- Each entry is { Name = "WeaponName" }.
+                    -- Up to 3 slots, shown left-to-right in LayoutOrder.
                     -- ------------------------------------------------
+                    if config.favoriteWeapons and #config.favoriteWeapons > 0 then
+                        result.FavoriteWeapons = config.favoriteWeapons
+                    end
                 end
                 return result
             end
